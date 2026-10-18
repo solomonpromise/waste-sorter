@@ -42,6 +42,8 @@
   .verdict { font-size: 1.4rem; font-weight: 700; margin: 0 0 4px; }
   .advice { padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); margin: 10px 0 14px; }
   .advice.unsure { background: var(--warn-soft); color: var(--text); }
+  .check { font-size: .9rem; color: var(--muted); margin: 0 0 6px; }
+  .check .fill { background: var(--muted); }
   .row { display: grid; grid-template-columns: 90px 1fr 52px; gap: 8px; align-items: center; margin: 6px 0; font-size: .95rem; }
   .track { background: var(--line); border-radius: 6px; height: 12px; overflow: hidden; }
   .fill { background: var(--accent); height: 100%; width: 0; transition: width .4s ease; }
@@ -74,7 +76,7 @@
       </div>
     </div>
     <div class="examples" id="examples"></div>
-    <div class="status" id="status">Loading the model (about 45 MB, once)…</div>
+    <div class="status" id="status">Loading the model (about 40 MB, once)…</div>
   </section>
 
   <section class="card result">
@@ -85,6 +87,7 @@
     <div>
       <p class="verdict" id="verdict">Which bin?</p>
       <div class="advice" id="advice" hidden></div>
+      <div id="check"></div>
       <div id="bars"></div>
     </div>
   </section>
@@ -99,6 +102,15 @@
       <p>It knows six classes: cardboard, glass, metal, paper, plastic and general trash. It works best with one item on a
          plain background, and it can be wrong, especially between glass and plastic. When it is less than 60% sure, it
          says so. Always check your local recycling rules.</p>
+      <p><strong>Is it waste at all?</strong> A six-bin classifier always picks a bin, even for a photo of a person or a
+         room. So a second, small model first checks whether the photo looks like a waste item. It reuses the network's
+         general ImageNet features and was trained on our waste photos against 1,000 everyday
+         <a href="https://cocodataset.org">COCO</a> photos (people, rooms, animals, streets). On photos it had never seen,
+         it flagged 97.5% of non-waste photos, while letting through 99.7% of TrashNet and 95.5% of real-world waste
+         photos. On close-up photos of single objects it flagged 77%; objects made of metal or plastic, such as a
+         French horn or a cassette player, got through about half the time, because the model judges what things look
+         like, not what they are for. Below the threshold, the app says the photo doesn't look like waste instead of
+         naming a bin.</p>
     </details>
   </section>
 </main>
@@ -154,17 +166,29 @@ async function classify(img) {
   const t0 = performance.now();
   const out = await session.run({ image: toTensor(img) });
   const logits = Array.from(out.logits.data);
+  const waste = out.waste_score.data[0];                   // 0 to 1: does this look like a waste item at all?
+  const isWaste = waste >= config.waste_threshold;
+  const meter = (label, q) =>
+    `<div class="row"><span>${label}</span><div class="track"><div class="fill" style="width:${(q * 100).toFixed(1)}%"></div></div><span class="pct">${Math.round(q * 100)}%</span></div>`;
   const m = Math.max(...logits), ex = logits.map((v) => Math.exp(v - m)), sum = ex.reduce((a, b) => a + b, 0);
   const probs = ex.map((v) => v / sum);
   const ranked = config.classes.map((c, i) => [c, probs[i]]).sort((a, b) => b[1] - a[1]);
-  const [best, p] = ranked[0];
-  $("verdict").textContent = p >= 0.6 ? `${best[0].toUpperCase() + best.slice(1)} (${Math.round(p * 100)}%)` : "Not sure";
+  const [best, p] = ranked[0], sure = p >= config.confidence_threshold;
   const adv = $("advice");
   adv.hidden = false;
-  adv.className = p >= 0.6 ? "advice" : "advice unsure";
-  adv.textContent = p >= 0.6 ? ADVICE[best] : `Best guess: ${best} (${Math.round(p * 100)}%). Check the label on the item, or try another photo.`;
-  $("bars").innerHTML = ranked.slice(0, 3).map(([c, q]) =>
-    `<div class="row"><span>${c}</span><div class="track"><div class="fill" style="width:${(q * 100).toFixed(1)}%"></div></div><span class="pct">${Math.round(q * 100)}%</span></div>`).join("");
+  $("check").innerHTML = `<p class="check">Waste check (needs ${Math.round(config.waste_threshold * 100)}%):</p>` + meter("waste?", waste);
+  if (!isWaste) {
+    $("verdict").textContent = "Not a waste item?";
+    adv.className = "advice unsure";
+    adv.textContent = "This doesn't look like a waste item, so the model won't pick a bin. It was trained on single items " +
+                      "such as bottles, cans, boxes and paper. Try one item on a plain background.";
+    $("bars").innerHTML = "";
+  } else {
+    $("verdict").textContent = sure ? `${best[0].toUpperCase() + best.slice(1)} (${Math.round(p * 100)}%)` : "Not sure";
+    adv.className = sure ? "advice" : "advice unsure";
+    adv.textContent = sure ? ADVICE[best] : `Best guess: ${best} (${Math.round(p * 100)}%). Check the label on the item, or try another photo.`;
+    $("bars").innerHTML = `<p class="check">Which bin:</p>` + ranked.slice(0, 3).map(([c, q]) => meter(c, q)).join("");
+  }
   $("status").textContent = `Done in ${Math.round(performance.now() - t0)} ms, on your device.`;
 }
 
