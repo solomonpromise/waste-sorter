@@ -29,6 +29,8 @@
          background: var(--accent); color: #fff; cursor: pointer; }
   .btn.secondary { background: var(--accent-soft); color: var(--text); }
   .btn:disabled { opacity: .5; cursor: progress; }
+  .webcam { margin-top: 14px; }
+  .webcam video { width: 100%; max-height: 360px; background: #000; border-radius: 10px; display: block; margin-bottom: 10px; object-fit: contain; }
   .examples { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 14px; }
   .examples button { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 4px; cursor: pointer; color: var(--muted); font-size: .75rem; }
   .examples img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 6px; display: block; }
@@ -63,6 +65,14 @@
     </div>
     <input type="file" id="camera" accept="image/*" capture="environment" hidden>
     <input type="file" id="upload" accept="image/*" hidden>
+    <div class="webcam" id="webcam" hidden>
+      <video id="video" autoplay playsinline muted></video>
+      <div class="actions">
+        <button class="btn" id="snapBtn">⏺ Capture</button>
+        <button class="btn secondary" id="switchBtn" hidden>🔄 Switch camera</button>
+        <button class="btn secondary" id="closeBtn">✕ Close camera</button>
+      </div>
+    </div>
     <div class="examples" id="examples"></div>
     <div class="status" id="status">Loading the model (about 45 MB, once)…</div>
   </section>
@@ -167,7 +177,43 @@ function show(src) {
 }
 function classifyUrl(url) { show(url); }
 function onFile(e) { const f = e.target.files[0]; if (f) show(URL.createObjectURL(f)); e.target.value = ""; }
-$("cameraBtn").onclick = () => $("camera").click();
+// Phones and tablets: the native camera (via the file input). Laptops and desktops: a live webcam preview.
+const isPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+                (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));   // iPads report "Macintosh"
+let stream = null, cameras = [], camIndex = 0;
+
+async function openWebcam() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $("camera").click(); return; }
+  try {
+    stopWebcam();
+    const constraints = cameras.length ? { video: { deviceId: { exact: cameras[camIndex].deviceId } } } : { video: true };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    $("video").srcObject = stream;
+    $("webcam").hidden = false;
+    cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+    $("switchBtn").hidden = cameras.length < 2;
+    $("status").textContent = "Point the camera at one item, then press Capture.";
+  } catch (e) {
+    $("status").textContent = "Couldn't open the camera (" + e.name + "). Allow camera access in your browser, or upload a photo instead.";
+  }
+}
+function stopWebcam() {
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  $("webcam").hidden = true;
+}
+function snap() {
+  const v = $("video");
+  if (!v.videoWidth) return;
+  const c = document.createElement("canvas");
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext("2d").drawImage(v, 0, 0);
+  stopWebcam();
+  show(c.toDataURL("image/jpeg", 0.92));
+}
+$("cameraBtn").onclick = () => (isPhone ? $("camera").click() : openWebcam());
+$("snapBtn").onclick = snap;
+$("closeBtn").onclick = () => { stopWebcam(); $("status").textContent = "Camera closed."; };
+$("switchBtn").onclick = () => { camIndex = (camIndex + 1) % cameras.length; openWebcam(); };
 $("uploadBtn").onclick = () => $("upload").click();
 $("camera").onchange = onFile;
 $("upload").onchange = onFile;
